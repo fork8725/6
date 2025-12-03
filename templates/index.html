@@ -1,0 +1,105 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Items Dashboard</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Items Dashboard</h1>
+    <form id="create-form">
+      <input type="text" id="name" placeholder="Name" required />
+      <input type="text" id="description" placeholder="Description" />
+      <button type="submit">Create</button>
+    </form>
+
+    <table id="items-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Description</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script>
+    async function fetchItems() {
+      const res = await fetch('/items');
+      const items = await res.json();
+      const tbody = document.querySelector('#items-table tbody');
+      tbody.innerHTML = '';
+      for (const item of items) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${item.id}</td>
+          <td><input value="${item.name}" data-id="${item.id}" class="name-input" /></td>
+          <td><input value="${item.description || ''}" data-id="${item.id}" class="desc-input" /></td>
+          <td>
+            <button class="save-btn" data-id="${item.id}">Save</button>
+            <button class="delete-btn" data-id="${item.id}">Delete</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    document.getElementById('create-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = document.getElementById('name').value.trim();
+      const description = document.getElementById('description').value.trim();
+      if (!name) return;
+      const res = await fetch('/items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, description: description || null })
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.detail || 'Create failed');
+      }
+      document.getElementById('name').value = '';
+      document.getElementById('description').value = '';
+      fetchItems();
+    });
+
+    document.querySelector('#items-table').addEventListener('click', async (e) => {
+      const target = e.target;
+      if (target.classList.contains('save-btn')) {
+        const id = target.getAttribute('data-id');
+        const row = target.closest('tr');
+        const name = row.querySelector('.name-input').value.trim();
+        const description = row.querySelector('.desc-input').value.trim();
+        const res = await fetch(`/items/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, description: description || null })
+        });
+        if (!res.ok) {
+          const data = await res.json();
+          alert(data.detail || 'Update failed');
+        }
+        fetchItems();
+      }
+      if (target.classList.contains('delete-btn')) {
+        const id = target.getAttribute('data-id');
+        const res = await fetch(`/items/${id}`, { method: 'DELETE' });
+        if (!res.ok && res.status !== 204) {
+          try {
+            const data = await res.json();
+            alert(data.detail || 'Delete failed');
+          } catch {}
+        }
+        fetchItems();
+      }
+    });
+
+    fetchItems();
+  </script>
+</body>
+</html>
+
