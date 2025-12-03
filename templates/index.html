@@ -20,144 +20,85 @@
       <div id="user-info" style="display:none"></div>
     </div>
 
-    <div id="dataset-tabs">
-      <!-- Removed Items tab -->
+    <div id="dataset-tabs" class="tabs">
       <button data-dataset="raw" class="tab active">原材料追溯记录</button>
       <button data-dataset="batch" class="tab">批次追溯关系</button>
       <button data-dataset="warning" class="tab">质量风险预警</button>
     </div>
+
+    <div class="toolbar">
+      <label for="search" class="sr-only">搜索</label>
+      <input id="search" type="text" placeholder="搜索...（按当前表字段包含匹配）" />
+      <div class="pager">
+        <button id="prev-page">上一页</button>
+        <span id="page-info">第 1 页</span>
+        <button id="next-page">下一页</button>
+      </div>
+    </div>
+
+    <div id="error" class="error" style="display:none"></div>
+    <div id="loading" class="loading" style="display:none">加载中...</div>
 
     <div id="admin-panel" style="display:none">
       <h2 id="form-title">创建</h2>
       <form id="create-form"></form>
     </div>
 
-    <table id="data-table">
-      <thead></thead>
-      <tbody></tbody>
-    </table>
+    <div class="table-wrap">
+      <table id="data-table">
+        <thead></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div id="empty" class="empty" style="display:none">暂无数据</div>
   </div>
 
   <script>
     let token = null;
     let role = 'guest';
     let current = 'raw';
+    let allRows = [];
+    let page = 1;
+    const pageSize = 10;
 
     const endpoints = {
-      // Removed items endpoints
       raw: { list: '/raw-material-trace', create: '/raw-material-trace', del: (id) => `/raw-material-trace/${id}` },
       batch: { list: '/batch-trace-relations', create: '/batch-trace-relations', del: (id) => `/batch-trace-relations/${id}` },
       warning: { list: '/quality-risk-warnings', create: '/quality-risk-warnings', del: (id) => `/quality-risk-warnings/${id}` },
     };
 
     const tableSchemas = {
-      // Removed items schema
       raw: {
         headers: ['TraceID','TraceCode','MaterialBatchNo','SupplierID','POID','IncomingInspectionID','ReceiveTime','Storage','RemainingQty','Status','Actions'],
         row: (r) => [r.traceid, r.tracecode, r.materialbatchno, r.supplierid, r.purchaseorderid, r.incominginspectionid, new Date(r.receivetime).toLocaleString(), r.storagelocation, r.remainingqty, r.tracestatus, actionButtons(r.traceid)],
-        form: () => `
-          <input name="traceid" placeholder="TraceID" required />
-          <input name="tracecode" placeholder="TraceCode" required />
-          <input name="materialbatchno" placeholder="MaterialBatchNo" required />
-          <input name="supplierid" placeholder="SupplierID" required />
-          <input name="purchaseorderid" placeholder="POID" required />
-          <input name="incominginspectionid" placeholder="IncomingInspectionID" required />
-          <input name="storagelocation" placeholder="Storage" required />
-          <input name="remainingqty" type="number" step="0.01" placeholder="RemainingQty" value="0" required />
-          <select name="tracestatus">
-            <option>In Stock</option>
-            <option>In Use</option>
-            <option>Consumed</option>
-            <option>Scrapped</option>
-          </select>
-          <button type="submit">Create</button>
-        `,
-        bodyFromForm: (fd) => ({
-          traceid: fd.get('traceid').trim(),
-          tracecode: fd.get('tracecode').trim(),
-          materialbatchno: fd.get('materialbatchno').trim(),
-          supplierid: fd.get('supplierid').trim(),
-          purchaseorderid: fd.get('purchaseorderid').trim(),
-          incominginspectionid: fd.get('incominginspectionid').trim(),
-          storagelocation: fd.get('storagelocation').trim(),
-          usedrecords: [],
-          remainingqty: parseFloat(fd.get('remainingqty')),
-          tracestatus: fd.get('tracestatus'),
-        }),
         idField: 'traceid',
       },
       batch: {
         headers: ['RelationID','ProductTraceCode','ProductBatchNo','MaterialTraceCode','EquipmentID','ProcessSchemeID','InspectorID','InspectionTime','Stage','Status','Actions'],
         row: (b) => [b.relationid, b.producttracecode, b.productbatchno, b.materialtracecode, b.equipmentid, b.processschemeid, b.inspectionpersonid, new Date(b.inspectiontime).toLocaleString(), b.relationstage, b.relationstatus, actionButtons(b.relationid)],
-        form: () => `
-          <input name="relationid" placeholder="RelationID" required />
-          <input name="producttracecode" placeholder="ProductTraceCode" required />
-          <input name="productbatchno" placeholder="ProductBatchNo" required />
-          <input name="materialtracecode" placeholder="MaterialTraceCode" required />
-          <input name="equipmentid" placeholder="EquipmentID" required />
-          <input name="processschemeid" placeholder="ProcessSchemeID" required />
-          <input name="inspectionpersonid" placeholder="InspectorID" required />
-          <input name="relationstage" placeholder="Stage" required />
-          <select name="relationstatus">
-            <option>Valid</option>
-            <option>Invalid</option>
-            <option>Pending Confirmation</option>
-          </select>
-          <button type="submit">Create</button>
-        `,
-        bodyFromForm: (fd) => ({
-          relationid: fd.get('relationid').trim(),
-          producttracecode: fd.get('producttracecode').trim(),
-          productbatchno: fd.get('productbatchno').trim(),
-          materialtracecode: fd.get('materialtracecode').trim(),
-          equipmentid: fd.get('equipmentid').trim(),
-          processschemeid: fd.get('processschemeid').trim(),
-          inspectionpersonid: fd.get('inspectionpersonid').trim(),
-          relationstage: fd.get('relationstage').trim(),
-          relationstatus: fd.get('relationstatus'),
-        }),
         idField: 'relationid',
       },
       warning: {
         headers: ['WarningID','Object','ObjectID','RiskType','RiskLevel','TriggerCondition','TriggerTime','HandlerID','HandleStatus','Result','Actions'],
         row: (w) => [w.warningid, w.warningobject, w.objectid, w.risktype, w.risklevel, w.triggercondition, new Date(w.triggertime).toLocaleString(), w.handlerid, w.handlestatus, w.handleresult || '', actionButtons(w.warningid)],
-        form: () => `
-          <input name="warningid" placeholder="WarningID" required />
-          <select name="warningobject">
-            <option>Raw Material</option>
-            <option>Semi-Finished Product</option>
-            <option>Finished Product</option>
-          </select>
-          <input name="objectid" placeholder="ObjectID" required />
-          <input name="risktype" placeholder="RiskType" required />
-          <input name="risklevel" type="number" min="1" max="5" value="3" required />
-          <input name="triggercondition" placeholder="TriggerCondition" required />
-          <input name="handlerid" placeholder="HandlerID" required />
-          <select name="handlestatus">
-            <option>Pending Handling</option>
-            <option>In Handling</option>
-            <option>Closed</option>
-          </select>
-          <input name="handleresult" placeholder="Result" />
-          <button type="submit">Create</button>
-        `,
-        bodyFromForm: (fd) => ({
-          warningid: fd.get('warningid').trim(),
-          warningobject: fd.get('warningobject'),
-          objectid: fd.get('objectid').trim(),
-          risktype: fd.get('risktype').trim(),
-          risklevel: parseInt(fd.get('risklevel'), 10),
-          triggercondition: fd.get('triggercondition').trim(),
-          handlerid: fd.get('handlerid').trim(),
-          handlestatus: fd.get('handlestatus'),
-          handleresult: (fd.get('handleresult')||'').trim() || null,
-        }),
         idField: 'warningid',
       },
     };
 
+    function setLoading(on) {
+      document.getElementById('loading').style.display = on ? 'block' : 'none';
+    }
+    function showError(msg) {
+      const el = document.getElementById('error');
+      el.textContent = msg || '';
+      el.style.display = msg ? 'block' : 'none';
+    }
+    function toggleEmpty(show) {
+      document.getElementById('empty').style.display = show ? 'block' : 'none';
+    }
+
     function actionButtons(id) {
-      return role === 'admin' ? `<button class="delete-btn" data-id="${id}">Delete</button>` : '';
+      return role === 'admin' ? `<button class="delete-btn" data-id="${id}">删除</button>` : '';
     }
 
     function renderTableHeader(headers) {
@@ -165,16 +106,47 @@
       thead.innerHTML = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
     }
 
-    async function fetchList() {
-      const res = await fetch(endpoints[current].list);
-      const data = await res.json();
+    function renderPage() {
       const tbody = document.querySelector('#data-table tbody');
+      const search = document.getElementById('search').value.trim().toLowerCase();
+      const filtered = !search ? allRows : allRows.filter(r => JSON.stringify(r).toLowerCase().includes(search));
+      const total = filtered.length;
+      const maxPage = Math.max(1, Math.ceil(total / pageSize));
+      page = Math.min(page, maxPage);
+      document.getElementById('page-info').textContent = `第 ${page} 页 / 共 ${maxPage} 页（${total} 条）`;
       tbody.innerHTML = '';
-      for (const row of data) {
+      toggleEmpty(total === 0);
+      const start = (page - 1) * pageSize;
+      const slice = filtered.slice(start, start + pageSize);
+      for (const row of slice) {
         const tr = document.createElement('tr');
         const cells = tableSchemas[current].row(row);
-        tr.innerHTML = cells.map(c => `<td>${c}</td>`).join('');
+        tr.innerHTML = cells.map(c => `<td title="${String(c).replace(/"/g,'&quot;')}">${c}</td>`).join('');
         tbody.appendChild(tr);
+      }
+    }
+
+    async function fetchList() {
+      setLoading(true);
+      showError('');
+      toggleEmpty(false);
+      try {
+        const res = await fetch(endpoints[current].list);
+        if (!res.ok) {
+          showError(`加载失败: ${res.status}`);
+          allRows = [];
+          renderPage();
+          return;
+        }
+        allRows = await res.json();
+        page = 1;
+        renderPage();
+      } catch (e) {
+        showError(e.message || '加载失败');
+        allRows = [];
+        renderPage();
+      } finally {
+        setLoading(false);
       }
     }
 
@@ -182,7 +154,61 @@
       const panel = document.getElementById('admin-panel');
       panel.style.display = role === 'admin' ? 'block' : 'none';
       const form = document.getElementById('create-form');
-      form.innerHTML = tableSchemas[current].form();
+      // Minimal form per dataset
+      if (current === 'raw') {
+        form.innerHTML = `
+          <input name=\"traceid\" placeholder=\"TraceID\" required />
+          <input name=\"tracecode\" placeholder=\"TraceCode\" required />
+          <input name=\"materialbatchno\" placeholder=\"MaterialBatchNo\" required />
+          <input name=\"supplierid\" placeholder=\"SupplierID\" required />
+          <input name=\"purchaseorderid\" placeholder=\"POID\" required />
+          <input name=\"incominginspectionid\" placeholder=\"IncomingInspectionID\" required />
+          <input name=\"storagelocation\" placeholder=\"Storage\" required />
+          <input name=\"remainingqty\" type=\"number\" step=\"0.01\" placeholder=\"RemainingQty\" value=\"0\" required />
+          <select name=\"tracestatus\">
+            <option>In Stock</option>
+            <option>In Use</option>
+            <option>Consumed</option>
+            <option>Scrapped</option>
+          </select>
+          <button type=\"submit\">创建</button>`;
+      } else if (current === 'batch') {
+        form.innerHTML = `
+          <input name=\"relationid\" placeholder=\"RelationID\" required />
+          <input name=\"producttracecode\" placeholder=\"ProductTraceCode\" required />
+          <input name=\"productbatchno\" placeholder=\"ProductBatchNo\" required />
+          <input name=\"materialtracecode\" placeholder=\"MaterialTraceCode\" required />
+          <input name=\"equipmentid\" placeholder=\"EquipmentID\" required />
+          <input name=\"processschemeid\" placeholder=\"ProcessSchemeID\" required />
+          <input name=\"inspectionpersonid\" placeholder=\"InspectorID\" required />
+          <input name=\"relationstage\" placeholder=\"Stage\" required />
+          <select name=\"relationstatus\">
+            <option>Valid</option>
+            <option>Invalid</option>
+            <option>Pending Confirmation</option>
+          </select>
+          <button type=\"submit\">创建</button>`;
+      } else if (current === 'warning') {
+        form.innerHTML = `
+          <input name=\"warningid\" placeholder=\"WarningID\" required />
+          <select name=\"warningobject\">
+            <option>Raw Material</option>
+            <option>Semi-Finished Product</option>
+            <option>Finished Product</option>
+          </select>
+          <input name=\"objectid\" placeholder=\"ObjectID\" required />
+          <input name=\"risktype\" placeholder=\"RiskType\" required />
+          <input name=\"risklevel\" type=\"number\" min=\"1\" max=\"5\" value=\"3\" required />
+          <input name=\"triggercondition\" placeholder=\"TriggerCondition\" required />
+          <input name=\"handlerid\" placeholder=\"HandlerID\" required />
+          <select name=\"handlestatus\">
+            <option>Pending Handling</option>
+            <option>In Handling</option>
+            <option>Closed</option>
+          </select>
+          <input name=\"handleresult\" placeholder=\"Result\" />
+          <button type=\"submit\">创建</button>`;
+      }
     }
 
     async function switchDataset(ds) {
@@ -200,11 +226,64 @@
       switchDataset(ds);
     });
 
+    document.getElementById('search').addEventListener('input', () => {
+      page = 1;
+      renderPage();
+    });
+    document.getElementById('prev-page').addEventListener('click', () => {
+      page = Math.max(1, page - 1);
+      renderPage();
+    });
+    document.getElementById('next-page').addEventListener('click', () => {
+      const total = allRows.length;
+      const maxPage = Math.max(1, Math.ceil(total / pageSize));
+      page = Math.min(maxPage, page + 1);
+      renderPage();
+    });
+
     document.getElementById('create-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       if (role !== 'admin' || !token) return alert('需要管理员登录');
       const fd = new FormData(e.target);
-      const body = tableSchemas[current].bodyFromForm(fd);
+      let body;
+      if (current === 'raw') {
+        body = {
+          traceid: fd.get('traceid').trim(),
+          tracecode: fd.get('tracecode').trim(),
+          materialbatchno: fd.get('materialbatchno').trim(),
+          supplierid: fd.get('supplierid').trim(),
+          purchaseorderid: fd.get('purchaseorderid').trim(),
+          incominginspectionid: fd.get('incominginspectionid').trim(),
+          storagelocation: fd.get('storagelocation').trim(),
+          usedrecords: [],
+          remainingqty: parseFloat(fd.get('remainingqty')),
+          tracestatus: fd.get('tracestatus'),
+        };
+      } else if (current === 'batch') {
+        body = {
+          relationid: fd.get('relationid').trim(),
+          producttracecode: fd.get('producttracecode').trim(),
+          productbatchno: fd.get('productbatchno').trim(),
+          materialtracecode: fd.get('materialtracecode').trim(),
+          equipmentid: fd.get('equipmentid').trim(),
+          processschemeid: fd.get('processschemeid').trim(),
+          inspectionpersonid: fd.get('inspectionpersonid').trim(),
+          relationstage: fd.get('relationstage').trim(),
+          relationstatus: fd.get('relationstatus'),
+        };
+      } else if (current === 'warning') {
+        body = {
+          warningid: fd.get('warningid').trim(),
+          warningobject: fd.get('warningobject'),
+          objectid: fd.get('objectid').trim(),
+          risktype: fd.get('risktype').trim(),
+          risklevel: parseInt(fd.get('risklevel'), 10),
+          triggercondition: fd.get('triggercondition').trim(),
+          handlerid: fd.get('handlerid').trim(),
+          handlestatus: fd.get('handlestatus'),
+          handleresult: (fd.get('handleresult')||'').trim() || null,
+        };
+      }
       const res = await fetch(endpoints[current].create, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -216,8 +295,8 @@
           alert(data.detail || '操作失败');
         } catch { alert('操作失败'); }
       }
-      await fetchList();
       e.target.reset();
+      await fetchList();
     });
 
     document.querySelector('#data-table').addEventListener('click', async (e) => {
