@@ -1,15 +1,18 @@
 from fastapi import FastAPI, Depends, HTTPException, Request, Header
-from sqlalchemy import Column, Integer, String, create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base, Session
-from pydantic import BaseModel
-from typing import Optional, List
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session
+from pydantic import BaseModel, Field
+from typing import Optional, List, Literal, Any
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+# Import models
+from models import Base, User, RawMaterialTraceRecord, BatchTraceRelation, QualityRiskWarning
 
 # Auth settings
 SECRET_KEY = "change-this-secret-key"
@@ -23,21 +26,6 @@ engine = create_engine(
     SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-# SQLAlchemy models
-class Item(Base):
-    __tablename__ = "items"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), nullable=False, unique=True)
-    description = Column(String(255), nullable=True)
-
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String(50), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
-    role = Column(String(20), nullable=False, default="user")  # 'admin' or 'user'
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -60,18 +48,7 @@ def get_db():
     finally:
         db.close()
 
-# Pydantic schemas
-class ItemCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
-
-class ItemRead(BaseModel):
-    id: int
-    name: str
-    description: Optional[str]
-    class Config:
-        from_attributes = True
-
+# Auth schemas
 class Token(BaseModel):
     access_token: str
     token_type: str
@@ -80,6 +57,90 @@ class UserRead(BaseModel):
     id: int
     username: str
     role: str
+    class Config:
+        from_attributes = True
+
+# Section 5.2 schemas
+# 5.2.1 RawMaterialTraceRecord
+class RawMaterialTraceCreate(BaseModel):
+    traceid: str = Field(min_length=1, max_length=32)
+    materialbatchno: str = Field(min_length=1, max_length=20)
+    tracecode: str = Field(min_length=1, max_length=36)
+    supplierid: str = Field(min_length=1, max_length=20)
+    purchaseorderid: str = Field(min_length=1, max_length=20)
+    incominginspectionid: str = Field(min_length=1, max_length=32)
+    receivetime: Optional[datetime] = None
+    storagelocation: str = Field(min_length=1, max_length=50)
+    usedrecords: List[dict] = Field(default_factory=list)
+    remainingqty: float = 0.0
+    tracestatus: Literal['In Stock','In Use','Consumed','Scrapped'] = 'In Stock'
+
+class RawMaterialTraceRead(BaseModel):
+    traceid: str
+    materialbatchno: str
+    tracecode: str
+    supplierid: str
+    purchaseorderid: str
+    incominginspectionid: str
+    receivetime: datetime
+    storagelocation: str
+    usedrecords: List[dict]
+    remainingqty: float
+    tracestatus: str
+    class Config:
+        from_attributes = True
+
+# 5.2.2 BatchTraceRelation
+class BatchTraceRelationCreate(BaseModel):
+    relationid: str = Field(min_length=1, max_length=32)
+    productbatchno: str = Field(min_length=1, max_length=20)
+    producttracecode: str = Field(min_length=1, max_length=36)
+    materialtracecode: str = Field(min_length=1, max_length=36)
+    equipmentid: str = Field(min_length=1, max_length=20)
+    processschemeid: str = Field(min_length=1, max_length=32)
+    inspectionpersonid: str = Field(min_length=1, max_length=20)
+    inspectiontime: Optional[datetime] = None
+    relationstage: str = Field(min_length=1, max_length=30)
+    relationstatus: Literal['Valid','Invalid','Pending Confirmation'] = 'Valid'
+
+class BatchTraceRelationRead(BaseModel):
+    relationid: str
+    productbatchno: str
+    producttracecode: str
+    materialtracecode: str
+    equipmentid: str
+    processschemeid: str
+    inspectionpersonid: str
+    inspectiontime: datetime
+    relationstage: str
+    relationstatus: str
+    class Config:
+        from_attributes = True
+
+# 5.2.3 QualityRiskWarning
+class QualityRiskWarningCreate(BaseModel):
+    warningid: str = Field(min_length=1, max_length=32)
+    warningobject: Literal['Raw Material','Semi-Finished Product','Finished Product']
+    objectid: str = Field(min_length=1, max_length=32)
+    risktype: str = Field(min_length=1, max_length=50)
+    risklevel: int = Field(ge=1, le=5, default=3)
+    triggercondition: str
+    triggertime: Optional[datetime] = None
+    handlerid: str = Field(min_length=1, max_length=20)
+    handlestatus: Literal['Pending Handling','In Handling','Closed'] = 'Pending Handling'
+    handleresult: Optional[str] = None
+
+class QualityRiskWarningRead(BaseModel):
+    warningid: str
+    warningobject: str
+    objectid: str
+    risktype: str
+    risklevel: int
+    triggercondition: str
+    triggertime: datetime
+    handlerid: str
+    handlestatus: str
+    handleresult: Optional[str]
     class Config:
         from_attributes = True
 
@@ -102,11 +163,11 @@ def get_password_hash(password: str) -> str:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def get_current_user(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)) -> User:
+def get_current_user(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)) -> Any:
     token = (authorization or "").replace("Bearer ", "")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -122,7 +183,7 @@ def get_current_user(authorization: Optional[str] = Header(None), db: Session = 
         raise HTTPException(status_code=401, detail="User not found")
     return user
 
-def require_admin(user: User = Depends(get_current_user)) -> User:
+def require_admin(user: Any = Depends(get_current_user)) -> Any:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin privileges required")
     return user
@@ -144,48 +205,140 @@ def me(current: User = Depends(get_current_user)):
 async def dashboard(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-# CRUD endpoints
-@app.post("/items", response_model=ItemRead, status_code=201)
-def create_item(item: ItemCreate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    existing = db.query(Item).filter(Item.name == item.name).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Item with this name already exists")
-    db_item = Item(name=item.name, description=item.description)
-    db.add(db_item)
+# CRUD for RawMaterialTraceRecord
+@app.post("/raw-material-trace", response_model=RawMaterialTraceRead, status_code=201)
+def create_raw_material_trace(payload: RawMaterialTraceCreate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    # uniqueness checks
+    if db.query(RawMaterialTraceRecord).filter(RawMaterialTraceRecord.traceid == payload.traceid).first():
+        raise HTTPException(status_code=400, detail="traceid already exists")
+    if db.query(RawMaterialTraceRecord).filter(RawMaterialTraceRecord.tracecode == payload.tracecode).first():
+        raise HTTPException(status_code=400, detail="tracecode already exists")
+    receivetime = payload.receivetime or datetime.now(timezone.utc)
+    record = RawMaterialTraceRecord(
+        traceid=payload.traceid,
+        materialbatchno=payload.materialbatchno,
+        tracecode=payload.tracecode,
+        supplierid=payload.supplierid,
+        purchaseorderid=payload.purchaseorderid,
+        incominginspectionid=payload.incominginspectionid,
+        receivetime=receivetime,
+        storagelocation=payload.storagelocation,
+        usedrecords=payload.usedrecords,
+        remainingqty=payload.remainingqty,
+        tracestatus=payload.tracestatus,
+    )
+    db.add(record)
     db.commit()
-    db.refresh(db_item)
-    return db_item
+    db.refresh(record)
+    return record
 
-@app.get("/items", response_model=List[ItemRead])
-def list_items(db: Session = Depends(get_db)):
-    return db.query(Item).order_by(Item.id).all()
+@app.get("/raw-material-trace", response_model=List[RawMaterialTraceRead])
+def list_raw_material_trace(db: Session = Depends(get_db)):
+    return db.query(RawMaterialTraceRecord).order_by(RawMaterialTraceRecord.receivetime.desc()).all()
 
-@app.get("/items/{item_id}", response_model=ItemRead)
-def get_item(item_id: int, db: Session = Depends(get_db)):
-    db_item = db.query(Item).filter(Item.id == item_id).first()
-    if not db_item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    return db_item
+@app.get("/raw-material-trace/{traceid}", response_model=RawMaterialTraceRead)
+def get_raw_material_trace(traceid: str, db: Session = Depends(get_db)):
+    record = db.query(RawMaterialTraceRecord).filter(RawMaterialTraceRecord.traceid == traceid).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="RawMaterialTraceRecord not found")
+    return record
 
-@app.put("/items/{item_id}", response_model=ItemRead)
-def update_item(item_id: int, item: ItemCreate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    db_item = db.query(Item).filter(Item.id == item_id).first()
-    if not db_item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    other = db.query(Item).filter(Item.name == item.name, Item.id != item_id).first()
-    if other:
-        raise HTTPException(status_code=400, detail="Another item with this name exists")
-    db_item.name = item.name
-    db_item.description = item.description
+@app.delete("/raw-material-trace/{traceid}", status_code=204)
+def delete_raw_material_trace(traceid: str, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    record = db.query(RawMaterialTraceRecord).filter(RawMaterialTraceRecord.traceid == traceid).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="RawMaterialTraceRecord not found")
+    db.delete(record)
     db.commit()
-    db.refresh(db_item)
-    return db_item
+    return None
 
-@app.delete("/items/{item_id}", status_code=204)
-def delete_item(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    db_item = db.query(Item).filter(Item.id == item_id).first()
-    if not db_item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    db.delete(db_item)
+# CRUD for BatchTraceRelation
+@app.post("/batch-trace-relations", response_model=BatchTraceRelationRead, status_code=201)
+def create_batch_trace_relation(payload: BatchTraceRelationCreate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    if db.query(BatchTraceRelation).filter(BatchTraceRelation.relationid == payload.relationid).first():
+        raise HTTPException(status_code=400, detail="relationid already exists")
+    if db.query(BatchTraceRelation).filter(BatchTraceRelation.producttracecode == payload.producttracecode).first():
+        raise HTTPException(status_code=400, detail="producttracecode already exists")
+    # validate materialtracecode exists in RawMaterialTraceRecord
+    if not db.query(RawMaterialTraceRecord).filter(RawMaterialTraceRecord.tracecode == payload.materialtracecode).first():
+        raise HTTPException(status_code=400, detail="materialtracecode not found in raw material records")
+    inspectiontime = payload.inspectiontime or datetime.now(timezone.utc)
+    rel = BatchTraceRelation(
+        relationid=payload.relationid,
+        productbatchno=payload.productbatchno,
+        producttracecode=payload.producttracecode,
+        materialtracecode=payload.materialtracecode,
+        equipmentid=payload.equipmentid,
+        processschemeid=payload.processschemeid,
+        inspectionpersonid=payload.inspectionpersonid,
+        inspectiontime=inspectiontime,
+        relationstage=payload.relationstage,
+        relationstatus=payload.relationstatus,
+    )
+    db.add(rel)
+    db.commit()
+    db.refresh(rel)
+    return rel
+
+@app.get("/batch-trace-relations", response_model=List[BatchTraceRelationRead])
+def list_batch_trace_relations(db: Session = Depends(get_db)):
+    return db.query(BatchTraceRelation).order_by(BatchTraceRelation.inspectiontime.desc()).all()
+
+@app.get("/batch-trace-relations/{relationid}", response_model=BatchTraceRelationRead)
+def get_batch_trace_relation(relationid: str, db: Session = Depends(get_db)):
+    rel = db.query(BatchTraceRelation).filter(BatchTraceRelation.relationid == relationid).first()
+    if not rel:
+        raise HTTPException(status_code=404, detail="BatchTraceRelation not found")
+    return rel
+
+@app.delete("/batch-trace-relations/{relationid}", status_code=204)
+def delete_batch_trace_relation(relationid: str, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    rel = db.query(BatchTraceRelation).filter(BatchTraceRelation.relationid == relationid).first()
+    if not rel:
+        raise HTTPException(status_code=404, detail="BatchTraceRelation not found")
+    db.delete(rel)
+    db.commit()
+    return None
+
+# CRUD for QualityRiskWarning
+@app.post("/quality-risk-warnings", response_model=QualityRiskWarningRead, status_code=201)
+def create_quality_risk_warning(payload: QualityRiskWarningCreate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    if db.query(QualityRiskWarning).filter(QualityRiskWarning.warningid == payload.warningid).first():
+        raise HTTPException(status_code=400, detail="warningid already exists")
+    triggertime = payload.triggertime or datetime.now(timezone.utc)
+    warn = QualityRiskWarning(
+        warningid=payload.warningid,
+        warningobject=payload.warningobject,
+        objectid=payload.objectid,
+        risktype=payload.risktype,
+        risklevel=payload.risklevel,
+        triggercondition=payload.triggercondition,
+        triggertime=triggertime,
+        handlerid=payload.handlerid,
+        handlestatus=payload.handlestatus,
+        handleresult=payload.handleresult,
+    )
+    db.add(warn)
+    db.commit()
+    db.refresh(warn)
+    return warn
+
+@app.get("/quality-risk-warnings", response_model=List[QualityRiskWarningRead])
+def list_quality_risk_warnings(db: Session = Depends(get_db)):
+    return db.query(QualityRiskWarning).order_by(QualityRiskWarning.triggertime.desc()).all()
+
+@app.get("/quality-risk-warnings/{warningid}", response_model=QualityRiskWarningRead)
+def get_quality_risk_warning(warningid: str, db: Session = Depends(get_db)):
+    warn = db.query(QualityRiskWarning).filter(QualityRiskWarning.warningid == warningid).first()
+    if not warn:
+        raise HTTPException(status_code=404, detail="QualityRiskWarning not found")
+    return warn
+
+@app.delete("/quality-risk-warnings/{warningid}", status_code=204)
+def delete_quality_risk_warning(warningid: str, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    warn = db.query(QualityRiskWarning).filter(QualityRiskWarning.warningid == warningid).first()
+    if not warn:
+        raise HTTPException(status_code=404, detail="QualityRiskWarning not found")
+    db.delete(warn)
     db.commit()
     return None

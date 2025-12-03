@@ -1,41 +1,39 @@
 <!doctype html>
-<html>
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <title>Items Dashboard</title>
+  <title>Traceability Dashboard</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
   <div class="container">
-    <h1>Items Dashboard</h1>
+    <h1>Traceability Dashboard</h1>
 
     <div id="auth">
       <form id="login-form">
+        <label for="username">用户名</label>
         <input type="text" id="username" placeholder="用户名" required />
+        <label for="password">密码</label>
         <input type="password" id="password" placeholder="密码" required />
         <button type="submit">登录</button>
       </form>
       <div id="user-info" style="display:none"></div>
     </div>
 
-    <div id="admin-panel" style="display:none">
-      <h2>管理</h2>
-      <form id="create-form">
-        <input type="text" id="name" placeholder="Name" required />
-        <input type="text" id="description" placeholder="Description" />
-        <button type="submit">Create</button>
-      </form>
+    <div id="dataset-tabs">
+      <!-- Removed Items tab -->
+      <button data-dataset="raw" class="tab active">原材料追溯记录</button>
+      <button data-dataset="batch" class="tab">批次追溯关系</button>
+      <button data-dataset="warning" class="tab">质量风险预警</button>
     </div>
 
-    <table id="items-table">
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Name</th>
-          <th>Description</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
+    <div id="admin-panel" style="display:none">
+      <h2 id="form-title">创建</h2>
+      <form id="create-form"></form>
+    </div>
+
+    <table id="data-table">
+      <thead></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -43,27 +41,199 @@
   <script>
     let token = null;
     let role = 'guest';
+    let current = 'raw';
 
-    async function fetchItems() {
-      const res = await fetch('/items');
-      const items = await res.json();
-      const tbody = document.querySelector('#items-table tbody');
+    const endpoints = {
+      // Removed items endpoints
+      raw: { list: '/raw-material-trace', create: '/raw-material-trace', del: (id) => `/raw-material-trace/${id}` },
+      batch: { list: '/batch-trace-relations', create: '/batch-trace-relations', del: (id) => `/batch-trace-relations/${id}` },
+      warning: { list: '/quality-risk-warnings', create: '/quality-risk-warnings', del: (id) => `/quality-risk-warnings/${id}` },
+    };
+
+    const tableSchemas = {
+      // Removed items schema
+      raw: {
+        headers: ['TraceID','TraceCode','MaterialBatchNo','SupplierID','POID','IncomingInspectionID','ReceiveTime','Storage','RemainingQty','Status','Actions'],
+        row: (r) => [r.traceid, r.tracecode, r.materialbatchno, r.supplierid, r.purchaseorderid, r.incominginspectionid, new Date(r.receivetime).toLocaleString(), r.storagelocation, r.remainingqty, r.tracestatus, actionButtons(r.traceid)],
+        form: () => `
+          <input name="traceid" placeholder="TraceID" required />
+          <input name="tracecode" placeholder="TraceCode" required />
+          <input name="materialbatchno" placeholder="MaterialBatchNo" required />
+          <input name="supplierid" placeholder="SupplierID" required />
+          <input name="purchaseorderid" placeholder="POID" required />
+          <input name="incominginspectionid" placeholder="IncomingInspectionID" required />
+          <input name="storagelocation" placeholder="Storage" required />
+          <input name="remainingqty" type="number" step="0.01" placeholder="RemainingQty" value="0" required />
+          <select name="tracestatus">
+            <option>In Stock</option>
+            <option>In Use</option>
+            <option>Consumed</option>
+            <option>Scrapped</option>
+          </select>
+          <button type="submit">Create</button>
+        `,
+        bodyFromForm: (fd) => ({
+          traceid: fd.get('traceid').trim(),
+          tracecode: fd.get('tracecode').trim(),
+          materialbatchno: fd.get('materialbatchno').trim(),
+          supplierid: fd.get('supplierid').trim(),
+          purchaseorderid: fd.get('purchaseorderid').trim(),
+          incominginspectionid: fd.get('incominginspectionid').trim(),
+          storagelocation: fd.get('storagelocation').trim(),
+          usedrecords: [],
+          remainingqty: parseFloat(fd.get('remainingqty')),
+          tracestatus: fd.get('tracestatus'),
+        }),
+        idField: 'traceid',
+      },
+      batch: {
+        headers: ['RelationID','ProductTraceCode','ProductBatchNo','MaterialTraceCode','EquipmentID','ProcessSchemeID','InspectorID','InspectionTime','Stage','Status','Actions'],
+        row: (b) => [b.relationid, b.producttracecode, b.productbatchno, b.materialtracecode, b.equipmentid, b.processschemeid, b.inspectionpersonid, new Date(b.inspectiontime).toLocaleString(), b.relationstage, b.relationstatus, actionButtons(b.relationid)],
+        form: () => `
+          <input name="relationid" placeholder="RelationID" required />
+          <input name="producttracecode" placeholder="ProductTraceCode" required />
+          <input name="productbatchno" placeholder="ProductBatchNo" required />
+          <input name="materialtracecode" placeholder="MaterialTraceCode" required />
+          <input name="equipmentid" placeholder="EquipmentID" required />
+          <input name="processschemeid" placeholder="ProcessSchemeID" required />
+          <input name="inspectionpersonid" placeholder="InspectorID" required />
+          <input name="relationstage" placeholder="Stage" required />
+          <select name="relationstatus">
+            <option>Valid</option>
+            <option>Invalid</option>
+            <option>Pending Confirmation</option>
+          </select>
+          <button type="submit">Create</button>
+        `,
+        bodyFromForm: (fd) => ({
+          relationid: fd.get('relationid').trim(),
+          producttracecode: fd.get('producttracecode').trim(),
+          productbatchno: fd.get('productbatchno').trim(),
+          materialtracecode: fd.get('materialtracecode').trim(),
+          equipmentid: fd.get('equipmentid').trim(),
+          processschemeid: fd.get('processschemeid').trim(),
+          inspectionpersonid: fd.get('inspectionpersonid').trim(),
+          relationstage: fd.get('relationstage').trim(),
+          relationstatus: fd.get('relationstatus'),
+        }),
+        idField: 'relationid',
+      },
+      warning: {
+        headers: ['WarningID','Object','ObjectID','RiskType','RiskLevel','TriggerCondition','TriggerTime','HandlerID','HandleStatus','Result','Actions'],
+        row: (w) => [w.warningid, w.warningobject, w.objectid, w.risktype, w.risklevel, w.triggercondition, new Date(w.triggertime).toLocaleString(), w.handlerid, w.handlestatus, w.handleresult || '', actionButtons(w.warningid)],
+        form: () => `
+          <input name="warningid" placeholder="WarningID" required />
+          <select name="warningobject">
+            <option>Raw Material</option>
+            <option>Semi-Finished Product</option>
+            <option>Finished Product</option>
+          </select>
+          <input name="objectid" placeholder="ObjectID" required />
+          <input name="risktype" placeholder="RiskType" required />
+          <input name="risklevel" type="number" min="1" max="5" value="3" required />
+          <input name="triggercondition" placeholder="TriggerCondition" required />
+          <input name="handlerid" placeholder="HandlerID" required />
+          <select name="handlestatus">
+            <option>Pending Handling</option>
+            <option>In Handling</option>
+            <option>Closed</option>
+          </select>
+          <input name="handleresult" placeholder="Result" />
+          <button type="submit">Create</button>
+        `,
+        bodyFromForm: (fd) => ({
+          warningid: fd.get('warningid').trim(),
+          warningobject: fd.get('warningobject'),
+          objectid: fd.get('objectid').trim(),
+          risktype: fd.get('risktype').trim(),
+          risklevel: parseInt(fd.get('risklevel'), 10),
+          triggercondition: fd.get('triggercondition').trim(),
+          handlerid: fd.get('handlerid').trim(),
+          handlestatus: fd.get('handlestatus'),
+          handleresult: (fd.get('handleresult')||'').trim() || null,
+        }),
+        idField: 'warningid',
+      },
+    };
+
+    function actionButtons(id) {
+      return role === 'admin' ? `<button class="delete-btn" data-id="${id}">Delete</button>` : '';
+    }
+
+    function renderTableHeader(headers) {
+      const thead = document.querySelector('#data-table thead');
+      thead.innerHTML = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
+    }
+
+    async function fetchList() {
+      const res = await fetch(endpoints[current].list);
+      const data = await res.json();
+      const tbody = document.querySelector('#data-table tbody');
       tbody.innerHTML = '';
-      for (const item of items) {
+      for (const row of data) {
         const tr = document.createElement('tr');
-        const editable = role === 'admin';
-        tr.innerHTML = `
-          <td>${item.id}</td>
-          <td>${editable ? `<input value="${item.name}" data-id="${item.id}" class="name-input" />` : `${item.name}`}</td>
-          <td>${editable ? `<input value="${item.description || ''}" data-id="${item.id}" class="desc-input" />` : `${item.description || ''}`}</td>
-          <td>
-            ${editable ? `<button class="save-btn" data-id="${item.id}">Save</button>` : ''}
-            ${editable ? `<button class="delete-btn" data-id="${item.id}">Delete</button>` : ''}
-          </td>
-        `;
+        const cells = tableSchemas[current].row(row);
+        tr.innerHTML = cells.map(c => `<td>${c}</td>`).join('');
         tbody.appendChild(tr);
       }
     }
+
+    function renderForm() {
+      const panel = document.getElementById('admin-panel');
+      panel.style.display = role === 'admin' ? 'block' : 'none';
+      const form = document.getElementById('create-form');
+      form.innerHTML = tableSchemas[current].form();
+    }
+
+    async function switchDataset(ds) {
+      current = ds;
+      document.querySelectorAll('#dataset-tabs .tab').forEach(btn => btn.classList.toggle('active', btn.getAttribute('data-dataset') === ds));
+      renderTableHeader(tableSchemas[current].headers);
+      renderForm();
+      await fetchList();
+    }
+
+    document.getElementById('dataset-tabs').addEventListener('click', (e) => {
+      const btn = e.target.closest('.tab');
+      if (!btn) return;
+      const ds = btn.getAttribute('data-dataset');
+      switchDataset(ds);
+    });
+
+    document.getElementById('create-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (role !== 'admin' || !token) return alert('需要管理员登录');
+      const fd = new FormData(e.target);
+      const body = tableSchemas[current].bodyFromForm(fd);
+      const res = await fetch(endpoints[current].create, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        try {
+          const data = await res.json();
+          alert(data.detail || '操作失败');
+        } catch { alert('操作失败'); }
+      }
+      await fetchList();
+      e.target.reset();
+    });
+
+    document.querySelector('#data-table').addEventListener('click', async (e) => {
+      const btn = e.target.closest('.delete-btn');
+      if (!btn) return;
+      if (role !== 'admin' || !token) return alert('需要管理员登录');
+      const id = btn.getAttribute('data-id');
+      const res = await fetch(endpoints[current].del(id), { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok && res.status !== 204) {
+        try {
+          const data = await res.json();
+          alert(data.detail || '删除失败');
+        } catch { alert('删除失败'); }
+      }
+      await fetchList();
+    });
 
     async function refreshUser() {
       if (!token) {
@@ -105,64 +275,12 @@
       const data = await res.json();
       token = data.access_token;
       await refreshUser();
-      await fetchItems();
+      await switchDataset(current);
     });
 
-    document.getElementById('create-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      if (!token) return alert('需要管理员登录');
-      const name = document.getElementById('name').value.trim();
-      const description = document.getElementById('description').value.trim();
-      const res = await fetch('/items', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ name, description: description || null })
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        alert(data.detail || 'Create failed');
-      }
-      document.getElementById('name').value = '';
-      document.getElementById('description').value = '';
-      fetchItems();
-    });
-
-    document.querySelector('#items-table').addEventListener('click', async (e) => {
-      const target = e.target;
-      if (target.classList.contains('save-btn')) {
-        if (!token) return alert('需要管理员登录');
-        const id = target.getAttribute('data-id');
-        const row = target.closest('tr');
-        const name = row.querySelector('.name-input').value.trim();
-        const description = row.querySelector('.desc-input').value.trim();
-        const res = await fetch(`/items/${id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ name, description: description || null })
-        });
-        if (!res.ok) {
-          const data = await res.json();
-          alert(data.detail || 'Update failed');
-        }
-        fetchItems();
-      }
-      if (target.classList.contains('delete-btn')) {
-        if (!token) return alert('需要管理员登录');
-        const id = target.getAttribute('data-id');
-        const res = await fetch(`/items/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
-        if (!res.ok && res.status !== 204) {
-          try {
-            const data = await res.json();
-            alert(data.detail || 'Delete failed');
-          } catch {}
-        }
-        fetchItems();
-      }
-    });
-
+    // Initial render
     refreshUser();
-    fetchItems();
+    switchDataset('raw');
   </script>
 </body>
 </html>
-
