@@ -342,3 +342,7 @@ def delete_quality_risk_warning(warningid: str, db: Session = Depends(get_db), _
     db.delete(warn)
     db.commit()
     return None
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)
