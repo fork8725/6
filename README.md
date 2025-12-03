@@ -34,8 +34,6 @@ Supply Chain and Quality Traceability Database Design Specification for AeroNetB
 在项目根目录（含 `requirements.txt` 的位置）执行：
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
