@@ -8,11 +8,24 @@
 <body>
   <div class="container">
     <h1>Items Dashboard</h1>
-    <form id="create-form">
-      <input type="text" id="name" placeholder="Name" required />
-      <input type="text" id="description" placeholder="Description" />
-      <button type="submit">Create</button>
-    </form>
+
+    <div id="auth">
+      <form id="login-form">
+        <input type="text" id="username" placeholder="用户名" required />
+        <input type="password" id="password" placeholder="密码" required />
+        <button type="submit">登录</button>
+      </form>
+      <div id="user-info" style="display:none"></div>
+    </div>
+
+    <div id="admin-panel" style="display:none">
+      <h2>管理</h2>
+      <form id="create-form">
+        <input type="text" id="name" placeholder="Name" required />
+        <input type="text" id="description" placeholder="Description" />
+        <button type="submit">Create</button>
+      </form>
+    </div>
 
     <table id="items-table">
       <thead>
@@ -28,6 +41,9 @@
   </div>
 
   <script>
+    let token = null;
+    let role = 'guest';
+
     async function fetchItems() {
       const res = await fetch('/items');
       const items = await res.json();
@@ -35,27 +51,71 @@
       tbody.innerHTML = '';
       for (const item of items) {
         const tr = document.createElement('tr');
+        const editable = role === 'admin';
         tr.innerHTML = `
           <td>${item.id}</td>
-          <td><input value="${item.name}" data-id="${item.id}" class="name-input" /></td>
-          <td><input value="${item.description || ''}" data-id="${item.id}" class="desc-input" /></td>
+          <td>${editable ? `<input value="${item.name}" data-id="${item.id}" class="name-input" />` : `${item.name}`}</td>
+          <td>${editable ? `<input value="${item.description || ''}" data-id="${item.id}" class="desc-input" />` : `${item.description || ''}`}</td>
           <td>
-            <button class="save-btn" data-id="${item.id}">Save</button>
-            <button class="delete-btn" data-id="${item.id}">Delete</button>
+            ${editable ? `<button class="save-btn" data-id="${item.id}">Save</button>` : ''}
+            ${editable ? `<button class="delete-btn" data-id="${item.id}">Delete</button>` : ''}
           </td>
         `;
         tbody.appendChild(tr);
       }
     }
 
+    async function refreshUser() {
+      if (!token) {
+        role = 'guest';
+        document.getElementById('admin-panel').style.display = 'none';
+        document.getElementById('user-info').style.display = 'none';
+        return;
+      }
+      const res = await fetch('/me', { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) {
+        role = 'guest';
+        token = null;
+        document.getElementById('admin-panel').style.display = 'none';
+        document.getElementById('user-info').style.display = 'none';
+        return;
+      }
+      const me = await res.json();
+      role = me.role;
+      const info = document.getElementById('user-info');
+      info.textContent = `已登录: ${me.username} (${me.role})`;
+      info.style.display = 'block';
+      document.getElementById('admin-panel').style.display = role === 'admin' ? 'block' : 'none';
+    }
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      const body = new URLSearchParams();
+      body.append('username', username);
+      body.append('password', password);
+      body.append('grant_type', 'password');
+      const res = await fetch('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.detail || '登录失败');
+        return;
+      }
+      const data = await res.json();
+      token = data.access_token;
+      await refreshUser();
+      await fetchItems();
+    });
+
     document.getElementById('create-form').addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (!token) return alert('需要管理员登录');
       const name = document.getElementById('name').value.trim();
       const description = document.getElementById('description').value.trim();
-      if (!name) return;
       const res = await fetch('/items', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ name, description: description || null })
       });
       if (!res.ok) {
@@ -70,13 +130,14 @@
     document.querySelector('#items-table').addEventListener('click', async (e) => {
       const target = e.target;
       if (target.classList.contains('save-btn')) {
+        if (!token) return alert('需要管理员登录');
         const id = target.getAttribute('data-id');
         const row = target.closest('tr');
         const name = row.querySelector('.name-input').value.trim();
         const description = row.querySelector('.desc-input').value.trim();
         const res = await fetch(`/items/${id}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify({ name, description: description || null })
         });
         if (!res.ok) {
@@ -86,8 +147,9 @@
         fetchItems();
       }
       if (target.classList.contains('delete-btn')) {
+        if (!token) return alert('需要管理员登录');
         const id = target.getAttribute('data-id');
-        const res = await fetch(`/items/${id}`, { method: 'DELETE' });
+        const res = await fetch(`/items/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
         if (!res.ok && res.status !== 204) {
           try {
             const data = await res.json();
@@ -98,6 +160,7 @@
       }
     });
 
+    refreshUser();
     fetchItems();
   </script>
 </body>
